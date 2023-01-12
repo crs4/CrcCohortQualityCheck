@@ -8,7 +8,19 @@ import argparse
 import os
 import xml.etree.ElementTree as ET
 from mapping_xml_to_openehr import mapping_xml_openehr as mxo
-from dictactfile import dictact
+import re
+from mapping_values import vmapping_xml_openehr as vmap
+import difflib
+from multiplicity import multi
+
+try:
+    from dictactfile import dictact
+except ModuleNotFoundError as err:
+    dictact={}
+    
+
+pat=re.compile('\s*')
+
 
 hostname='localhost'
 port='8080'
@@ -55,7 +67,10 @@ def get_composition(client,auth,ehrid,cid):
         headers={'Authorization':auth,'Content-Type':'application/json'}, \
                 )
     if(response.status_code <210 and response.status_code>199):
+        response.encoding='utf-8'
         compflat=json.loads(response.text)["composition"]
+        # for key in compflat:
+        #     compflat[key]=compflat[key].encode('latin1').decode('utf8')
         return compflat
     else:           
         logging.warning(f"Couldn't retrieve the composition. Error{response.status_code}")
@@ -67,9 +82,9 @@ def get_composition(client,auth,ehrid,cid):
         error['headers']=str(response.headers)     
         return error
 
-def read_xml(file):
+def read_xml(filex):
         '''return a list of trees, one tree for each BHPatient'''
-        mytree = ET.parse(file)
+        mytree = ET.parse(filex)
         myroot = mytree.getroot()
         listoftrees=[]
         ns=''
@@ -80,8 +95,8 @@ def read_xml(file):
 #                       print('found')
 #                       print(ch.tag)
                         listoftrees.append(ch)
-        logging.info(f"Found {nop} patients in file {file}")
-        print(f"Found {nop} patients in file {file}")
+        logging.info(f"Found {nop} patients in file {filex}")
+        print(f"Found {nop} patients in file")
         return listoftrees
 
 def find_ns(bhtree):
@@ -90,9 +105,9 @@ def find_ns(bhtree):
         try:
                 i=bhtree.tag.index('BHPatient')
                 ns=bhtree.tag[0:i]
-                print(f"namespace={ns}")
+                logging.debug(f"namespace={ns}")
         except ValueError:
-                print('namespace not found')    
+                logging.warning('namespace not found')    
         return ns
 
 def getlen(xmltree):
@@ -102,6 +117,472 @@ def getlen(xmltree):
     return i
 
 
+def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
+    ndifff=0
+    nalan=0
+    if len(xmlelement)==1:
+        for b in xmlelement[0].keys():
+            if b=='date':
+                continue
+            # logging.debug(f'type(b)={type(b)}')
+            logging.debug('YYYYYYYYYYYYYYYYYYYY')
+            logging.debug(f'b={b}')
+            logging.debug(f'datatitle={datatitle}')
+            if b in vmap:
+                logging.debug('b in vmap')
+                valuexml=xmlelement[0][b]
+                
+                logging.debug(f'mxo[b]={mxo[b]}')
+                logging.debug(f'vmap[b]={vmap[b]}')
+                if valuexml==None or pat.fullmatch(valuexml) != None:
+                    if mxo[b][0] in composition:
+                        valuecomp=composition[mxo[b][0]]
+                        logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                        if valuecomp=='None':
+                            nalan+=1                       
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                            continue
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'1DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                            logging.debug(f'empty valuexml')
+                            fd.write(f'1DIFFERENT! Patient={Patient}')
+                            fd.write(f'mapping {b}=>{mxo[b]}')
+                            fd.write(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                            fd.write(f'empty valuexml')
+                            continue           
+                    else:
+                        nalan+=1
+                        logging.debug(f'mapping {b}=>{mxo[b]}')
+                        logging.debug(f"{datatitle} xml={valuexml} realcomp=nothing")
+                        logging.debug(f'empty valuexml mapped to NO element')
+                        continue         
+                if mxo[b][0] in composition:                 
+                    valuecomp=composition[mxo[b][0]]
+                    logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                    if len(mxo[b])==1:
+                        if vmap[b][valuexml] == valuecomp:
+                            nalan+=1
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}") 
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'2DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}") 
+                            fd.write(f'2DIFFERENT! Patient={Patient}')                        
+                            fd.write(f'mapping {b}=>{mxo[b]}\n')
+                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}\n")
+                    else:
+                        i=0
+                        if mxo[b][1].endswith('|value'):
+                            i=1
+                        elif mxo[b][2].endswith('|value'):
+                            i=2
+                        valuexml=xmlelement[0][b]
+                        valuecomp=composition[mxo[b][i]]
+                        if vmap[b][valuexml] == valuecomp:
+                            nalan+=1
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}") 
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'3DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')  
+                            fd.write(f'3DIFFERENT! Patient={Patient}')                       
+                            fd.write(f'mapping {b}=>{mxo[b]}\n')
+                            fd.write(f"xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}\n")
+                else:
+                    nalan+=1
+                    ndifff+=1
+                    logging.debug(f'4DIFFERENT! Patient={Patient}')
+                    logging.debug(f'mapping {b}=>{mxo[b]}')
+                    logging.debug(f'{datatitle} {valuexml}=>NO ENTRY')  
+                    fd.write(f'4DIFFERENT! Patient={Patient}')                       
+                    fd.write(f'mapping {b}=>{mxo[b]}\n')
+                    fd.write(f"xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp=NO ENTRY\n")
+            else:
+                logging.debug('b not in vmap SINGLE')
+                valuexml=xmlelement[0][b]
+                if valuexml==None or pat.fullmatch(valuexml) != None:
+                    if mxo[b][0] in composition:
+                        valuecomp=composition[mxo[b][0]]
+                        logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                        if valuecomp=='None':
+                            nalan+=1                       
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                            continue
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'5DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f'{datatitle} xml={valuexml}=>comp={valuecomp}')  
+                            logging.debug(f'empty valuexml ')
+                            fd.write(f'5DIFFERENT! Patient={Patient}')
+                            fd.write(f'mapping {b}=>{mxo[b]}')
+                            fd.write(f'{datatitle} xml={valuexml}=>comp={valuecomp}')  
+                            fd.write(f'empty valuexml ')
+                            continue  
+                    else:
+                        nalan+=1
+                        logging.debug(f'mapping {b}=>{mxo[b]}')
+                        logging.debug(f'{datatitle} {valuexml}=>nothing')  
+                        logging.debug(f'empty valuexml mapped to NO element')
+                        continue
+                if mxo[b][0] in composition:
+                    valuecomp=composition[mxo[b][0]]
+                    logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                    if isinstance(valuecomp,bool):
+                        valuecomp=str(valuecomp)
+                    logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                    logging.debug(f'mxo[b]={mxo[b]}')
+                    if valuexml==valuecomp:
+                        nalan+=1
+                        logging.debug(f'mapping {b}=>{mxo[b]}')
+                        logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                    else:
+                        if  mxo[b][0].endswith('age_at_diagnosis'):
+                            valuexml2='P'+valuexml+'Y'
+                            if valuexml2==valuecomp:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f"{datatitle} xml={valuexml} xml2={valuexml2} realcomp={valuecomp}")
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'6DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')   
+                                fd.write(f'6DIFFERENT! Patient={Patient}')                      
+                                fd.write(f'mapping {b}=>{mxo[b]}\n')
+                                fd.write(f"xml={valuexml}  xml2={valuexml2} realcomp={valuecomp}\n")  
+                        elif mxo[b][0].endswith('overall_survival_status') or \
+                            mxo[b][0].endswith('surgery_start_relative') or \
+                            mxo[b][0].endswith('date_of_end_of_pharmacotherapy') or \
+                            mxo[b][0].endswith('date_of_start_of_pharmacotherapy') or \
+                            mxo[b][0].endswith('time_of_therapy_response') or \
+                            mxo[b][0].endswith('date_of_start_of_targeted_therapy') or \
+                            mxo[b][0].endswith('date_of_end_of_targeted_therapy') or \
+                            mxo[b][0].endswith('date_of_start_of_radiation_therapy') or \
+                            mxo[b][0].endswith('date_of_end_of_radiation_therapy') or \
+                            mxo[b][0].endswith('time_of_recurrence'):
+                            v1=int(valuexml)*7
+                            valuexml2='P'+str(v1)+'D'
+                            if valuexml2==valuecomp:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f"{datatitle} xml={valuexml} xml2={valuexml2} realcomp={valuecomp}")
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'7DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')    
+                                fd.write(f'7DIFFERENT! Patient={Patient}')                     
+                                fd.write(f'mapping {b}=>{mxo[b]}\n')
+                                fd.write(f"xml={valuexml}  xml2={valuexml2} realcomp={valuecomp}\n")  
+                        elif mxo[b][0].endswith('date_of_diagnosis') or \
+                            mxo[b][0].endswith('year_of_sample_collection'):
+                            l1=len(valuexml)
+                            valuecomp2=valuecomp[:l1]
+                            if valuexml==valuecomp2:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f"{datatitle} xml={valuexml} comp2={valuecomp2} realcomp={valuecomp}")
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'8DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f'{datatitle} {valuexml}=>{valuecomp}') 
+                                fd.write(f'8DIFFERENT! Patient={Patient}')                        
+                                fd.write(f'mapping {b}=>{mxo[b]}\n')
+                                fd.write(f"xml={valuexml} comp2={valuecomp2} realcomp={valuecomp}\n")                              
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'9DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')  
+                            fd.write(f'9DIFFERENT! Patient={Patient}')                       
+                            fd.write(f'mapping {b}=>{mxo[b]}\n')
+                            fd.write(f"xml={valuexml} realcomp={valuecomp}\n")   
+                else:
+                    nalan+=1
+                    ndifff+=1
+                    logging.debug(f'10DIFFERENT! Patient={Patient}')
+                    logging.debug(f'mapping {b}=>{mxo[b]}')
+                    logging.debug(f'{datatitle} {valuexml}=>NO ENTRY')  
+                    fd.write(f'10DIFFERENT! Patient={Patient}')                       
+                    fd.write(f'mapping {b}=>{mxo[b]}\n')
+                    fd.write(f"xml={valuexml} realcomp=NO ENTRY\n")                    
+    else: #the macroelement is repeated more than once. Ex sample1 sample2
+        for j in range(len(xmlelement)):
+            logging.debug('LLLLLLLLLLL')
+            logging.debug(j)
+            logging.debug(xmlelement)
+            multipath=multi[datatitle]
+            newpath=multipath[:-1]+str(j)
+            for b in xmlelement[j].keys():
+                if b=='date':
+                    continue
+                logging.debug('YYYYYYYYYYYYYYYYYYYY')
+                logging.debug(f'b={b}')
+                #print(b)
+                #print(datatitle)                 
+                # logging.debug(f'type(b)={type(b)}')
+                if b in vmap:
+                    valuexml=xmlelement[j][b]
+                    logging.debug(f'valuexml={valuexml}')
+                    if valuexml==None or pat.fullmatch(valuexml) != None:
+                            jmult=zeromult.replace(multipath,newpath)
+                            if jmult in composition:
+                                valuecomp=composition[jmult]
+                                logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                                if valuecomp=='None':
+                                    nalan+=1                       
+                                    logging.debug(f'mapping {b}=>{mxo[b]}')
+                                    logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                                    continue
+                                else:
+                                    nalan+=1
+                                    ndifff+=1
+                                    logging.debug(f'11DIFFERENT! Patient={Patient}')
+                                    logging.debug(f'mapping {b}=>{mxo[b]}')
+                                    logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')  
+                                    logging.debug(f'empty valuexml ')
+                                    fd.write(f'11DIFFERENT! Patient={Patient}')
+                                    fd.write(f'mapping {b}=>{mxo[b]}')
+                                    fd.write(f'{datatitle} {valuexml}=>{valuecomp}')  
+                                    fd.write(f'empty valuexml ')
+                                    continue  
+                            else:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f'{datatitle} {valuexml}=>nothing')  
+                                logging.debug(f'empty valuexml mapped to NO element')
+                                continue     
+
+                    if len(mxo[b])==1:
+                        zeromult=mxo[b][0]
+                        jmult=zeromult.replace(multipath,newpath)
+                        if jmult in composition:
+                            valuecomp=composition[jmult]
+                            logging.debug(f'valuecomp={valuecomp}')
+                            v1=vmap[b][valuexml] 
+                            v2=valuecomp
+                            if v1 == v2:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp={valuecomp}")            
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'12DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp={valuecomp}")  
+                                fd.write(f'12DIFFERENT! Patient={Patient}')                       
+                                fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp={valuecomp}\n")
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'13DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY") 
+                            fd.write(f'13DIFFERENT! Patient={Patient}')                        
+                            fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY\n")                           
+                    else:
+                        i=0
+                        if mxo[b][1].endswith('|value'):
+                            i=1
+                        elif mxo[b][2].endswith('|value'):
+                            i=2
+                        #print(valuexml)
+                        #print(b)
+                        #print(mxo[b][i])
+                        zeromult=mxo[b][i]
+                        jmult=zeromult.replace(multipath,newpath)
+                        if jmult in composition:
+                            valuecomp=composition[jmult]
+                            logging.debug(f'valuecomp={valuecomp}')
+                            v1=vmap[b][valuexml] 
+                            v2=valuecomp
+                            if v1 == v2:
+                                nalan+=1             
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp={valuecomp}")            
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'14DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp={valuecomp}")  
+                                fd.write(f'14DIFFERENT! Patient={Patient}')                      
+                                fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp={valuecomp}\n") 
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'15DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp=MISSING ENTRY") 
+                            fd.write(f'15DIFFERENT! Patient={Patient}')                       
+                            fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY\n")                             
+                else:#b not in vmap
+                    logging.debug('b not in vmap')
+                    valuexml=xmlelement[j][b]
+                    logging.debug(f'valuexml={valuexml}')
+                    zeromult=mxo[b][0]
+                    jmult=zeromult.replace(multipath,newpath)
+
+                    if valuexml==None or pat.fullmatch(valuexml) != None:
+                        if jmult in composition:
+                            valuecomp=composition[jmult]
+                            logging.debug(f'valuexml={valuexml} valuecomp={valuecomp}')
+                            if valuecomp=='None':
+                                nalan+=1                       
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")
+                                continue
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'16DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]}')
+                                logging.debug(f'{datatitle} {valuexml}=>{valuecomp}')  
+                                logging.debug(f'empty valuexml ')
+                                fd.write(f'16DIFFERENT! Patient={Patient}')
+                                fd.write(f'mapping {b}=>{mxo[b]}')
+                                fd.write(f'{datatitle} {valuexml}=>{valuecomp}')  
+                                fd.write(f'empty valuexml ')
+                                continue  
+                        else:
+                            nalan+=1
+                            logging.debug(f'mapping {b}=>{mxo[b]}')
+                            logging.debug(f'{datatitle} {valuexml}=>nothing')  
+                            logging.debug(f'empty valuexml mapped to NO element')
+                            continue             
+
+                    if len(mxo[b])==1:
+                        zeromult=mxo[b][0]
+                        jmult=zeromult.replace(multipath,newpath)
+                        if jmult in composition:
+                            valuecomp=composition[jmult]
+                            logging.debug(f'valuecomp={valuecomp}')
+                            v1=valuexml
+                            v2=valuecomp
+                            if v1 == v2:
+                                nalan+=1
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")            
+                            else:
+                                if jmult.endswith('year_of_sample_collection'):
+                                    l1=len(valuexml)
+                                    valuecomp2=valuecomp[:l1]
+                                    if valuexml==valuecomp2:
+                                        nalan+=1
+                                        logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                        logging.debug(f"{datatitle} xml={valuexml} comp2={valuecomp2} realcomp={valuecomp}")
+                                    else:
+                                        nalan+=1
+                                        ndifff+=1
+                                        logging.debug(f'17DIFFERENT! Patient={Patient}')
+                                        logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                        logging.debug(f'{datatitle} xml={valuexml}=>comp2={valuecomp2} comp={valuecomp}')    
+                                        fd.write(f'17DIFFERENT! Patient={Patient}')                     
+                                        fd.write(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                        fd.write(f"xml={valuexml} comp2={valuecomp2} realcomp={valuecomp}\n")
+                                elif jmult.endswith('overall_survival_status') or \
+                                     jmult.endswith('surgery_start_relative') or \
+                                     jmult.endswith('date_of_end_of_pharmacotherapy') or \
+                                     jmult.endswith('date_of_start_of_pharmacotherapy') or \
+                                     jmult.endswith('time_of_therapy_response') or \
+                                     jmult.endswith('date_of_start_of_targeted_therapy') or \
+                                     jmult.endswith('date_of_end_of_targeted_therapy') or \
+                                     jmult.endswith('date_of_start_of_radiation_therapy') or \
+                                     jmult.endswith('date_of_end_of_radiation_therapy') or \
+                                     jmult.endswith('time_of_recurrence'):
+                                    v1=int(valuexml)*7
+                                    valuexml2='P'+str(v1)+'D'
+                                    if valuexml2==valuecomp:
+                                        nalan+=1
+                                        logging.debug(f'mapping {b}=>{jmult}')
+                                        logging.debug(f"{datatitle} xml={valuexml} xml2={valuexml2} realcomp={valuecomp}")
+                                    else:
+                                        nalan+=1
+                                        ndifff+=1
+                                        logging.debug(f'18DIFFERENT! Patient={Patient}')
+                                        logging.debug(f'mapping {b}=>{jmult} j={j} jmult={jmult}')
+                                        logging.debug(f'{datatitle} xml={valuexml} xml2={valuexml2}=>{valuecomp}') 
+                                        fd.write(f'18DIFFERENT! Patient={Patient}')                        
+                                        fd.write(f'mapping {b}=>{jmult}\n')
+                                        fd.write(f"xml={valuexml}  xml2={valuexml2} realcomp={valuecomp}\n")  
+                                else:
+                                    nalan+=1
+                                    ndifff+=1
+                                    logging.debug(f'19DIFFERENT! Patient={Patient}')
+                                    logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                    logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")   
+                                    fd.write(f'19DIFFERENT! Patient={Patient}')                     
+                                    fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                    fd.write(f"{datatitle} xml={valuexml} realcomp={valuecomp}\n")
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'20DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                            logging.debug(f"{datatitle} xml={valuexml} realcomp=MISSING ENTRY")  
+                            fd.write(f'20DIFFERENT! Patient={Patient}')                      
+                            fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                            fd.write(f"{datatitle} xml={valuexml} realcomp=MISSING ENTRY\n")
+                    else:
+                        i=0
+                        if mxo[b][1].endswith('|value'):
+                            i=1
+                        elif mxo[b][2].endswith('|value'):
+                            i=2
+                        zeromult=mxo[b][i]
+                        jmult=zeromult.replace(multipath,newpath)
+                        if jmult in composition:
+                            valuecomp=composition[jmult]                        
+                            v1=valuexml
+                            v2=valuecomp
+                            if v1 == v2:
+                                nalan+=1             
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")            
+                            else:
+                                nalan+=1
+                                ndifff+=1
+                                logging.debug(f'21DIFFERENT! Patient={Patient}')
+                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}") 
+                                fd.write(f'21DIFFERENT! Patient={Patient}')                       
+                                fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                fd.write(f"{datatitle} xml={valuexml} realcomp={valuecomp}\n")       
+                        else:
+                            nalan+=1
+                            ndifff+=1
+                            logging.debug(f'22DIFFERENT! Patient={Patient}')
+                            logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                            logging.debug(f"{datatitle} xml={valuexml} realcomp=MISSING ENTRY") 
+                            fd.write(f'22DIFFERENT! Patient={Patient}')                       
+                            fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                            fd.write(f"{datatitle} xml={valuexml} realcomp=MISSING ENTRY\n")                                                   
+    return ndifff,nalan               
+
 def main():
     global dictact
     parser = argparse.ArgumentParser()
@@ -109,6 +590,7 @@ def main():
     parser.add_argument('--inputdir',help='dir containing the xmls',default='/usr/local/data/WORK/OPENEHR/ECOSYSTEM/TO_AND_FROM_CONVERTER/CODE/FROM_DB_CSV_TO_XML_CONVERTER')
     parser.add_argument('--basename',help='basename to filter xml',default='patientsFromDb_')
     parser.add_argument('--templatename',help='template to use when posting',default='crc_cohort')
+    parser.add_argument('--fileindex',help='consider only the file with that index',default='-1')
     parser.add_argument('--check',action='store_true', help='check the missing leafs for leafs that should be there but are not')
     args=parser.parse_args()
 
@@ -128,16 +610,18 @@ def main():
         logging.error(f'directory {inputdir} does not exist')
         sys.exit(1)
 
+    fileindex=int(args.fileindex)
+
     basename=args.basename
 
     logging.info(f'basename given: {basename}')
     print(f'basename given: {basename}')
     #get the list of files
     filelist=[]
-    for file in os.listdir(inputdir):
-        if file.startswith(basename) and file.endswith(".xml"):
-            logging.debug(f'file added {os.path.join(inputdir, file)}')
-            filelist.append(file)
+    for filex in os.listdir(inputdir):
+        if filex.startswith(basename) and filex.endswith(".xml"):
+            logging.debug(f'file added {os.path.join(inputdir, filex)}')
+            filelist.append(filex)
     #Now sort the list
     filelist.sort(key=lambda a: int(a.split('_')[1].split('.xml')[0]))
     for i,f in enumerate(filelist):
@@ -145,10 +629,8 @@ def main():
 
     filelistfullpath=[inputdir+'/'+f for f in filelist]
 
-    # #mapping xml tag -> openEHR path in mxo
-
-    # #read mapping terminology
-    # mappingterminology=read_mapping_terminology()
+    # #mapping xml tag -> openEHR path read in mxo in include
+    # mapping terminology values read in vmap in include
 
     #init ehrbase
     client = requests.Session()
@@ -161,29 +643,55 @@ def main():
     if dictact=={}:
         dictact=get_compids(client,auth)
         with open('dictactfile.py','w') as f:
-            f.write('dicact={')
-            for k in dictact.keys():
-                f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ],')
-            f.write('}')
+            f.write('dictact={')
+            nkeys=len(dictact.keys())
+            for m,k in enumerate(dictact.keys()):
+                if m==nkeys-1:
+                    f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ]}')
+                else:
+                    f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ],')
     # logging.info('------dictact-------')
     # logging.info(dictact)
 
+    #output file
+    #file with differences
+    fd=open('XMLopenEHRcompsdiff','w')
+    npat=0
     #cycle over the xml files
     k=0
-    for file in filelistfullpath:
-        logging.debug('---------------------')
-        logging.info(f'Processing {file}')
-        print(f'Processing {file}')
-        xmlpatients=read_xml(file)
+    totalnumberdifferences=0
+    totalan=0
+    npataffected=0
+    totpatients=0
+    for filex in filelistfullpath:
+        logging.info('---------------------')
+        logging.info(f'Processing {filex}')
+        print('---------------------')
+        print(f'Processing {filex}')
+        xmlpatients=read_xml(filex)
         ns=find_ns(xmlpatients[0])
 
-        if k==1:
-            break
+
         k=k+1
+        if k<fileindex:
+            continue
+        # if k<4:
+        #      continue
 
         j=0
+        totpatientsperfile=0
+        npataffectedperfile=0
+        totalnumberdifferencesperfile=0
+        totalanperfile=0
         for xmlpatient in xmlpatients:
+            totpatients+=1
+            totpatientsperfile+=1
+            nperpat=0
             j=j+1
+            npat=npat+1
+            if not npat%100:
+                logging.info(f'{npat} patients processed')
+                print(f'{npat} patients processed')
             basic_data=False
             hi=False
             sa=False
@@ -201,7 +709,6 @@ def main():
             TargetedTherapy=[]
             Radiationtherapy=[]
             datalen=getlen(xmlpatient)
-            print(f'datalen={datalen}')
             i=0
             for elem in xmlpatient.iter():
                 i=i+1
@@ -213,18 +720,23 @@ def main():
                 eventparse=False
                 if hi: #histopathology event
                     if tag.startswith('Dataelement'):
-                        histo[tag]=text
+                        if tag=='Dataelement_68_2':
+                            histo[tag]=elem[0].text
+                        else:
+                            histo[tag]=text
                         if i==datalen:
                             hi=False
                             Histopathology.append(histo)                    
                     elif tag=='Event':
                         hi=False
                         eventparse=True
-                        Histopathology.append(histo)
+                        if len(histo)>1:
+                            Histopathology.append(histo)
                     elif i==datalen:
                         hi=False
-                        Histopathology.append(histo)
-                        logging.debug(f'histo={histo} Histo={Histopathology}')
+                        if len(histo)>1:
+                            Histopathology.append(histo)
+                        #logging.debug(f'histo={histo} Histo={Histopathology}')
                 elif sa:#sample event
                     if tag.startswith('Dataelement'):
                         sample[tag]=text
@@ -234,10 +746,12 @@ def main():
                     elif tag=='Event':
                         sa=False
                         eventparse=True
-                        Sample.append(sample)
+                        if len(sample)>1:
+                            Sample.append(sample)
                     elif i==datalen:
                         sa=False
-                        Sample.append(sample)                        
+                        if len(sample)>1:
+                            Sample.append(sample)                        
                 elif su:#surgery event
                     if tag.startswith('Dataelement'):
                         surgery[tag]=text
@@ -247,10 +761,12 @@ def main():
                     elif tag=='Event':
                         su=False
                         eventparse=True
-                        Surgery.append(surgery)
+                        if len(surgery)>1:
+                            Surgery.append(surgery)
                     elif i==datalen:
                         su=False
-                        Surgery.append(surgery)                        
+                        if len(surgery)>1:
+                            Surgery.append(surgery)                        
                 elif ph:#pharmacotherapy event
                     if tag.startswith('Dataelement'):                        
                         pharma[tag]=text
@@ -260,10 +776,12 @@ def main():
                     elif tag=='Event':
                         ph=False
                         eventparse=True
-                        Pharmacotherapy.append(pharma)
+                        if len(pharma)>1:
+                            Pharmacotherapy.append(pharma)
                     elif i==datalen:
                         ph=False
-                        Pharmacotherapy.append(pharma)                           
+                        if len(pharma)>1:
+                            Pharmacotherapy.append(pharma)                           
                 elif re:#response to therapy event
                     if tag.startswith('Dataelement'):
                         rethe[tag]=text
@@ -273,10 +791,12 @@ def main():
                     elif tag=='Event':
                         re=False
                         eventparse=True
-                        Responsetotherapy.append(rethe)
+                        if len(rethe)>1:
+                            Responsetotherapy.append(rethe)
                     elif i==datalen:
                         re=False
-                        Responsetotherapy.append(rethe)                           
+                        if len(rethe)>1:
+                            Responsetotherapy.append(rethe)                           
                 elif ta:#targeted therapy event
                     if tag.startswith('Dataelement'):
                         tathe[tag]=text
@@ -286,10 +806,12 @@ def main():
                     elif tag=='Event':
                         ta=False
                         eventparse=True
-                        TargetedTherapy.append(tathe)
+                        if len(tathe)>1:
+                            TargetedTherapy.append(tathe)
                     elif i==datalen:
                         ta=False
-                        TargetedTherapy.append(tathe)                          
+                        if len(tathe)>1:
+                            TargetedTherapy.append(tathe)                          
                 elif ra:#radiation therapy event
                     if tag.startswith('Dataelement'):
                         radthe[tag]=text
@@ -299,10 +821,12 @@ def main():
                     elif tag=='Event':
                         ra=False
                         eventparse=True
-                        Radiationtherapy.append(radthe)
+                        if len(radthe)>1:
+                            Radiationtherapy.append(radthe)
                     elif i==datalen:
                         ra=False
-                        Radiationtherapy.append(radthe)                                
+                        if len(radthe)>1:
+                            Radiationtherapy.append(radthe)                                
                 elif basic_data: 
                     if tag.startswith('Dataelement'):
                         bada[tag]=text
@@ -354,6 +878,7 @@ def main():
                         logging.warning(f'event unknown {tag} {text} {attr} ')                    
 
             logging.debug(f'+++++++++Patient={patient}+++++++++++++++++++')
+            
             logging.debug(f'BasicData={BasicData}')
             logging.debug(f'Histopathology={Histopathology}')
             logging.debug(f'Surgery={Surgery}')
@@ -366,84 +891,126 @@ def main():
             #get composition
             ehrid=dictact[patient][0]
             cid=dictact[patient][1]
+            fd.write(f'+++++++++Patient={patient}+++++++++\n')
+            fd.write(f'XMLfile={filex}\n')
+            fd.write(f'ehrid={ehrid}  cid={cid}\n')
             composition=get_composition(client,auth,ehrid,cid)
             if 'status' in composition:
                 logging.info(f'error retrieving composition for patient={patient}')
                 sys.exit(1)
-            logging.debug('COMPOSITION')
-            logging.debug(composition)
+            #logging.debug('COMPOSITION')
+            #logging.debug(composition)
 
             # logging.debug(f'type(composition)={type(composition)}')
             # logging.debug(f'type(mxo)={type(mxo)}')
             
+            #COMPARISON
+
             #BasicData
-            if len(BasicData)==1:
-                for b in BasicData[0].keys():
-                    if b=='date':
-                        continue
-                    # logging.debug(f'type(b)={type(b)}')
-                    logging.debug('YYYYYYYYYYYYYYYYYYYY')
-                    logging.debug(f'mapping {b}=>{mxo[b]}')
-                    if len(mxo[b])==1:
-                        # logging.debug(f'mxo[b][0]={mxo[b][0]}')
-                        # logging.debug(f'{composition["crc_cohort7/diagnostic_examinations/liver_imaging/liver_imaging"]}')
-                        # logging.debug(f'{composition[mxo[b][0]]}')
-                        logging.debug(f'BasicData {BasicData[0][b]}=>{composition[mxo[b][0]]}')    
-                    else:
-                        for l in range(len(mxo[b])):
-                            logging.debug(f'BasicData {BasicData[0][b]}=>{composition[mxo[b][l]]}')
-                    logging.debug('YYYYYYYYYYYYYYYYYYYY')        
-            if len(Histopathology)==1:
-                for h in Histopathology[0].keys():
-                    if h=='date':
-                        continue                
-                    logging.debug('ZZZZZZZZZZZZZZZZZZZZ')                            
-                    logging.debug(f'mapping {h}=>{mxo[h]}')
-                    if len(mxo[h])==1:
-                        logging.debug(f'Histopathology {Histopathology[0][h]}=>{composition[mxo[h][0]]}')
-                    else:
-                        for l in range(len(mxo[h])): 
-                            logging.debug(f'Histopathology {Histopathology[0][h]}=>{composition[mxo[h][l]]}')            
-                    logging.debug('ZZZZZZZZZZZZZZZZZZZZ')   
-            else:
-                pass
+            ndiffhere,nana=comparexml2comp('BasicData',BasicData,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block BasicData={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block BasicData={ndiffhere}\n')
+            
+            #Histopathology
+            ndiffhere,nana=comparexml2comp('Histopathology',Histopathology,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Histopathology={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Histopathology={ndiffhere}\n')
 
-            if len(Sample)==1:
-                for s in Sample[0].keys():
-                    if s=='date':
-                        continue
-                    logging.debug('AAAAAAAAAAAAAAAAAAAA')        
-                    logging.debug(f'mapping {s}=>{mxo[s]}')                    
-                    if len(mxo[s])==1:
-                        logging.debug(f'Sample {Sample[0][s]}=>{composition[mxo[s][0]]}')
-                    else:
-                        for l in range(len(mxo[s])): 
-                            logging.debug(f'Sample {Sample[0][s]}=>{composition[mxo[s][l]]}')                    
-                    logging.debug('AAAAAAAAAAAAAAAAAAAA')          
-            else:
-                pass
+            #Sample
+            ndiffhere,nana=comparexml2comp('Sample',Sample,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Sample={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Sample={ndiffhere}\n')
 
-            if len(Surgery)==1:
-                for s in Surgery[0].keys():
-                    if s=='date':
-                        continue        
-                    logging.debug('BBBBBBBBBBBBBBBBBBBB') 
-                    logging.debug(f'mapping {s}=>{mxo[s]}')
-                    if len(mxo[s])==1:
-                        logging.debug(f'Surgery {Surgery[0][s]}=>{composition[mxo[s][0]]}')
-                    else:
-                        for l in range(len(mxo[s])): 
-                            logging.debug(f'Surgery {Surgery[0][s]}=>{composition[mxo[s][l]]}')                    
-                    logging.debug('BBBBBBBBBBBBBBBBBBBB') 
-            else:
-                pass
+            #Surgery
+            ndiffhere,nana=comparexml2comp('Surgery',Surgery,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Surgery={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Surgery={ndiffhere}\n')
 
-            #make data comparison
+            #Pharmacotherapy
+            ndiffhere,nana=comparexml2comp('Pharmacotherapy',Pharmacotherapy,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Pharmacotherapy={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Pharmacotherapy={ndiffhere}\n')
 
-                #print(f'i={i}')
-            if j==2:
-                break
+            #Responsetotherapy
+            ndiffhere,nana=comparexml2comp('Responsetotherapy',Responsetotherapy,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Responsetotherapy={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Responsetotherapy={ndiffhere}\n')
 
+            #TargetedTherapy
+            ndiffhere,nana=comparexml2comp('TargetedTherapy',TargetedTherapy,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block TargetedTherapy={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block TargetedTherapy={ndiffhere}\n')
+
+            #Radiationtherapy
+            ndiffhere,nana=comparexml2comp('Radiationtherapy',Radiationtherapy,composition,fd,patient)
+            nperpat+=ndiffhere
+            totalnumberdifferences+=ndiffhere
+            totalnumberdifferencesperfile+=ndiffhere
+            totalan+=nana
+            totalanperfile+=nana
+            logging.info(f'NDIFF Block Radiationtherapy={ndiffhere}  ndifftot={totalnumberdifferences}')
+            #fd.write(f'NDIFF Block Radiationtherapy={ndiffhere}\n')
+
+            logging.debug(f'patient={patient} nerrors={nperpat}')
+            if nperpat > 0:
+                npataffected+=1
+                npataffectedperfile+=1
+
+        print(f'totalnumberdifferencesperfile/analysed={totalnumberdifferencesperfile}/{totalanperfile}')
+        print(f'patientsaffectedbyerrorsperfile/totalpatientsperfile={npataffectedperfile}/{totpatientsperfile}')
+        logging.info(f'totalnumberdifferencesperfile/analysed={totalnumberdifferencesperfile}/{totalanperfile}')
+        logging.info(f'patientsaffectedbyerrorsperfile/totalpatientsperfile={npataffectedperfile}/{totpatientsperfile}')
+        fd.write(f'totalnumberdifferencesperfile/analysed={totalnumberdifferencesperfile}/{totalanperfile}\n')
+        fd.write(f'patientsaffectedbyerrorsperfile/totalpatientsperfile={npataffectedperfile}/{totpatientsperfile}\n')
+
+
+            #if j==100: #FOR DEBUGGING. ONLY FIRST PATIENT
+            #    break
+        # if k==4:#FOR DEBUGGING. ONLY FIRST FILE
+        #     break   
+        if k==fileindex:#FOR DEBUGGING. ONLY FIRST FILE
+            break  
+    print(f'totalnumberdifferences/analysed={totalnumberdifferences}/{totalan}')
+    print(f'patientsaffectedbyerrors/totalpatients={npataffected}/{totpatients}')
+    logging.info(f'totalnumberdifferences/analysed={totalnumberdifferences}/{totalan}')
+    logging.info(f'patientsaffectedbyerrors/totalpatients={npataffected}/{totpatients}')
+    fd.write(f'totalnumberdifferences/analised={totalnumberdifferences}/{totalan}\n')
+    fd.write(f'patientsaffectedbyerrors/totalpatients={npataffected}/{totpatients}\n')
 
 
 if __name__ == '__main__':
