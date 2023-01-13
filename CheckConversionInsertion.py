@@ -293,6 +293,11 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                         elif mxo[b][0].endswith('date_of_diagnosis') or \
                             mxo[b][0].endswith('year_of_sample_collection'):
                             l1=len(valuexml)
+                            #make exception for patient 59939 that is expressed as 1995-10-4
+                            if l1==9:
+                                valuexml2=valuexml[:-1]+'0'+valuexml[-1]
+                                valuexml=valuexml2
+                                l1=len(valuexml)
                             valuecomp2=valuecomp[:l1]
                             if valuexml==valuecomp2:
                                 nalan+=1

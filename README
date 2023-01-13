@@ -1,1 +1,23 @@
-Quality Check that compares the compositions uploaded in the EHRBase server with the original XML files for the CRC_Cohort data
+Quality Check is a program that compares the compositions uploaded in the EHRBase server with the original XML files for the CRC_Cohort data
+So it needs the crc_cohort xml/s and the EHRBase server, where the compositions have been inserted, running
+
+N.B.  dictact.py is the file where the patient number is mapped to its ehr id and composition id (of the only composition it contains)
+the first time you run the check make sure to delete dictact.py if existent.  It will be recreated with the right mappings.
+
+How to run
+to run: python3 CheckConversionInsertion.py
+
+usage: CheckConversionInsertion.py [-h] [--loglevel LOGLEVEL] [--inputdir INPUTDIR] [--basename BASENAME]
+                                   [--templatename TEMPLATENAME] [--fileindex FILEINDEX] [--check]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --loglevel LOGLEVEL   the logging level:DEBUG,INFO,WARNING,ERROR or CRITICAL
+  --inputdir INPUTDIR   dir containing the xmls
+  --basename BASENAME   basename to filter xml
+  --templatename TEMPLATENAME
+                        template to use when posting
+  --fileindex FILEINDEX
+                        consider only the file with that index
+  --check               check the missing leafs for leafs that should be there but are not
+
