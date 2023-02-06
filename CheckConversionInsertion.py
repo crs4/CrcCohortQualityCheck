@@ -24,9 +24,29 @@ pat=re.compile('\s*')
 
 hostname='localhost'
 port='8080'
-templatename='crc_cohort7'
+templatenamedefault='BBMRI-ERIC_Colorectal_Cancer_Cohort_Report'
 EHR_SERVER_BASE_URL = 'http://'+hostname+':'+port+'/ehrbase/rest/openehr/v1/'
 EHR_SERVER_BASE_URL_FLAT = 'http://'+hostname+':'+port+'/ehrbase/rest/ecis/v1/composition/'
+
+def get_composition_file(filename):
+    with open(filename,'r') as f:
+        composition = json.load(f)
+        #logging.debug(f'composition retrieved: {composition}')
+        logging.debug(f"composition {composition['bbmri-eric_colorectal_cancer_cohort_report/context/biobank/biobank_name']}")
+        return composition
+
+
+def get_compids_file(dircomp,basename):
+    '''Get pseudo:composition_full_filename dictionary for all the compositions in the dir dircomp'''
+    dictactfile={}
+    for filex in os.listdir(dircomp):
+        if filex.startswith(basename) and filex.endswith(".json"):
+            patientnumber=filex.split('_')[3].split('.json')[0]
+            fullpathfilename=os.path.join(dircomp, filex)
+            dictactfile[patientnumber]=fullpathfilename
+            logging.debug(f'file {fullpathfilename} added to dictactfile for patient {patientnumber}')
+    return dictactfile            
+
 
 def get_compids(client,auth):
     '''Get pseudo:[ehrid,cid] dictionary for all the compositions in the EHRBase server'''
@@ -60,7 +80,7 @@ def get_compids(client,auth):
         dictact['headers']=str(response.headers)
     return dictact
 
-def get_composition(client,auth,ehrid,cid):
+def get_composition(client,auth,ehrid,cid,templatename):
     myurlu=url_normalize(EHR_SERVER_BASE_URL_FLAT+cid) 
     response = client.get(myurlu, \
         params={'ehrId':str(ehrid),'templateId':templatename,'format':'FLAT'}, \
@@ -117,7 +137,7 @@ def getlen(xmltree):
     return i
 
 
-def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
+def comparexml2comp(datatitle,xmlelement,composition,fd,Patient,notload):
     ndifff=0
     nalan=0
     if len(xmlelement)==1:
@@ -276,7 +296,10 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                             mxo[b][0].endswith('date_of_end_of_radiation_therapy') or \
                             mxo[b][0].endswith('time_of_recurrence'):
                             v1=int(valuexml)*7
-                            valuexml2='P'+str(v1)+'D'
+                            if notload:
+                                valuexml2='P'+valuexml+'W'
+                            else:
+                                valuexml2='P'+str(v1)+'D'
                             if valuexml2==valuecomp:
                                 nalan+=1
                                 logging.debug(f'mapping {b}=>{mxo[b]}')
@@ -337,6 +360,7 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
             logging.debug(xmlelement)
             multipath=multi[datatitle]
             newpath=multipath[:-1]+str(j)
+            logging.debug(f'multipath={multipath} newpath={newpath}')
             for b in xmlelement[j].keys():
                 if b=='date':
                     continue
@@ -403,10 +427,10 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                             ndifff+=1
                             logging.debug(f'13DIFFERENT! Patient={Patient}')
                             logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
-                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY") 
+                            logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp=MISSING ENTRY") 
                             fd.write(f'13DIFFERENT! Patient={Patient}')                        
                             fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
-                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY\n")                           
+                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml] } realcomp=MISSING ENTRY\n")                           
                     else:
                         i=0
                         if mxo[b][1].endswith('|value'):
@@ -444,7 +468,7 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                             logging.debug(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp=MISSING ENTRY") 
                             fd.write(f'15DIFFERENT! Patient={Patient}')                       
                             fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
-                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={v1} realcomp=MISSING ENTRY\n")                             
+                            fd.write(f"{datatitle} xml={valuexml} expectedcomp={vmap[b][valuexml]} realcomp=MISSING ENTRY\n")                             
                 else:#b not in vmap
                     logging.debug('b not in vmap')
                     valuexml=xmlelement[j][b]
@@ -519,8 +543,11 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                                      jmult.endswith('date_of_start_of_radiation_therapy') or \
                                      jmult.endswith('date_of_end_of_radiation_therapy') or \
                                      jmult.endswith('time_of_recurrence'):
-                                    v1=int(valuexml)*7
-                                    valuexml2='P'+str(v1)+'D'
+                                    if notload:
+                                        valuexml2='P'+str(valuexml)+'W'
+                                    else: 
+                                        v1=int(valuexml)*7
+                                        valuexml2='P'+str(v1)+'D'
                                     if valuexml2==valuecomp:
                                         nalan+=1
                                         logging.debug(f'mapping {b}=>{jmult}')
@@ -569,14 +596,27 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
                                 logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
                                 logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}")            
                             else:
-                                nalan+=1
-                                ndifff+=1
-                                logging.debug(f'21DIFFERENT! Patient={Patient}')
-                                logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
-                                logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}") 
-                                fd.write(f'21DIFFERENT! Patient={Patient}')                       
-                                fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
-                                fd.write(f"{datatitle} xml={valuexml} realcomp={valuecomp}\n")       
+                                if jmult.endswith('year_of_sample_collection'):
+                                    l1=len(valuexml)
+                                    valuecomp2=valuecomp[:l1]
+                                    if valuexml != valuecomp2:
+                                        nalan+=1
+                                        ndifff+=1
+                                        logging.debug(f'21alphaDIFFERENT! Patient={Patient}')
+                                        logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                        logging.debug(f"{datatitle} xml={valuexml} valuecomp2={valuecomp2} realcomp={valuecomp}") 
+                                        fd.write(f'21alphaDIFFERENT! Patient={Patient}')                       
+                                        fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                        fd.write(f"{datatitle} xml={valuexml} valuecomp2={valuecomp2} realcomp={valuecomp}\n")                                        
+                                else:
+                                    nalan+=1
+                                    ndifff+=1
+                                    logging.debug(f'21DIFFERENT! Patient={Patient}')
+                                    logging.debug(f'mapping {b}=>{mxo[b]} j={j} jmult={jmult}')
+                                    logging.debug(f"{datatitle} xml={valuexml} realcomp={valuecomp}") 
+                                    fd.write(f'21DIFFERENT! Patient={Patient}')                       
+                                    fd.write('mapping {b}=>{mxo[b]} j={j} jmult={jmult}\n')
+                                    fd.write(f"{datatitle} xml={valuexml} realcomp={valuecomp}\n")       
                         else:
                             nalan+=1
                             ndifff+=1
@@ -589,14 +629,16 @@ def comparexml2comp(datatitle,xmlelement,composition,fd,Patient):
     return ndifff,nalan               
 
 def main():
-    global dictact
+    global dictact,dictactfile
     parser = argparse.ArgumentParser()
     parser.add_argument('--loglevel',help='the logging level:DEBUG,INFO,WARNING,ERROR or CRITICAL',default='DEBUG')
     parser.add_argument('--inputdir',help='dir containing the xmls',default='/usr/local/data/WORK/OPENEHR/ECOSYSTEM/TO_AND_FROM_CONVERTER/CODE/FROM_DB_CSV_TO_XML_CONVERTER')
     parser.add_argument('--basename',help='basename to filter xml',default='patientsFromDb_')
-    parser.add_argument('--templatename',help='template to use when posting',default='crc_cohort')
+    parser.add_argument('--templatename',help='template id used in compositions',default=templatenamedefault)
     parser.add_argument('--fileindex',help='consider only the file with that index',default='-1')
-    parser.add_argument('--check',action='store_true', help='check the missing leafs for leafs that should be there but are not')
+    parser.add_argument('--notload',action='store_true',help='Run against the compositions not loaded yet')
+    parser.add_argument('--dircomp',help='dir containing the compositions',default='/usr/local/data/WORK/OPENEHR/ECOSYSTEM/TO_AND_FROM_CONVERTER/CODE/RESULTS/')
+    parser.add_argument('--basename_comp',help='basename for dir containing the compositions',default='myoutput')
     args=parser.parse_args()
 
     #input
@@ -605,6 +647,28 @@ def main():
             raise ValueError('Invalid log level: %s' % loglevel)
     logging.basicConfig(filename='./Check.log',filemode='w',level=loglevel)
 
+    templatename=args.templatename
+    templatenamecomp=templatename.lower()
+    #remap to the chosen template_id
+    if templatenamecomp != 'crc_cohort7':
+        for key, value in mxo.items():
+            newvalue=[]
+            for v in value:
+                base=v.split('crc_cohort7',1)[1]
+                newvalue.append(templatenamecomp+base)
+            mxo[key]=newvalue
+        for key, value in multi.items():
+            base=value.split('crc_cohort7',1)[1]
+            newvalue=templatenamecomp+base
+            multi[key]=newvalue
+
+    notload=False
+    if args.notload:
+        notload=True
+        dircomp=args.dircomp
+        print (f'notload is set to true. Compositions are loaded from {dircomp}')
+        logging.info(f'notload is set to true. Compositions are loaded from {dircomp}')
+        basename_comp=args.basename_comp
 
     inputdir=args.inputdir
     print(f'inputdir given: {inputdir}')
@@ -637,26 +701,31 @@ def main():
     # #mapping xml tag -> openEHR path read in mxo in include
     # mapping terminology values read in vmap in include
 
-    #init ehrbase
-    client = requests.Session()
-    client.auth = ('ehrbase-user','SuperSecretPassword')
-    auth="Basic ZWhyYmFzZS11c2VyOlN1cGVyU2VjcmV0UGFzc3dvcmQ="
+    if notload:
+        dictactfile=get_compids_file(dircomp,basename_comp)
+        logging.info(f'basename_comp given: {basename_comp}')
+        print(f'basename_comp given: {basename_comp}')
+    else:
+        #init ehrbase
+        client = requests.Session()
+        client.auth = ('ehrbase-user','SuperSecretPassword')
+        auth="Basic ZWhyYmFzZS11c2VyOlN1cGVyU2VjcmV0UGFzc3dvcmQ="
 
-    # #find pseudo:[ehrid,cid]
-    #get_compids time consuming. only first time done
-    # 
-    if dictact=={}:
-        dictact=get_compids(client,auth)
-        with open('dictactfile.py','w') as f:
-            f.write('dictact={')
-            nkeys=len(dictact.keys())
-            for m,k in enumerate(dictact.keys()):
-                if m==nkeys-1:
-                    f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ]}')
-                else:
-                    f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ],')
-    # logging.info('------dictact-------')
-    # logging.info(dictact)
+        # #find pseudo:[ehrid,cid]
+        #get_compids time consuming. only first time done
+        # 
+        if dictact=={}:
+            dictact=get_compids(client,auth)
+            with open('dictactfile.py','w') as f:
+                f.write('dictact={')
+                nkeys=len(dictact.keys())
+                for m,k in enumerate(dictact.keys()):
+                    if m==nkeys-1:
+                        f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ]}')
+                    else:
+                        f.write('"'+k+'" : ["'+dictact[k][0]+'" , "'+dictact[k][1]+'" ],')
+        # logging.info('------dictact-------')
+        # logging.info(dictact)
 
     #output file
     #file with differences
@@ -849,6 +918,8 @@ def main():
                         bada={}
                     elif tag=='Event':
                         eventparse=True
+                    elif tag=='Location':
+                        location=attr['name']
 
                 if eventparse: #event to be parsed
                     if attr['eventtype']=='Surgery':
@@ -884,6 +955,7 @@ def main():
 
             logging.debug(f'+++++++++Patient={patient}+++++++++++++++++++')
             
+            logging.debug(f'Location={location}')
             logging.debug(f'BasicData={BasicData}')
             logging.debug(f'Histopathology={Histopathology}')
             logging.debug(f'Surgery={Surgery}')
@@ -894,12 +966,24 @@ def main():
             logging.debug(f'Radiationtherapy={Radiationtherapy}') 
 
             #get composition
-            ehrid=dictact[patient][0]
-            cid=dictact[patient][1]
-            fd.write(f'+++++++++Patient={patient}+++++++++\n')
-            fd.write(f'XMLfile={filex}\n')
-            fd.write(f'ehrid={ehrid}  cid={cid}\n')
-            composition=get_composition(client,auth,ehrid,cid)
+            if notload:
+                fd.write(f'+++++++++Patient={patient}+++++++++\n')
+                fd.write(f'XMLfile={filex}\n')
+                filecomp=dictactfile[patient]
+                fd.write(f'filecomp={filecomp}\n')
+                composition=get_composition_file(filecomp)
+            else:
+                ehrid=dictact[patient][0]
+                cid=dictact[patient][1]
+                fd.write(f'+++++++++Patient={patient}+++++++++\n')
+                fd.write(f'XMLfile={filex}\n')
+                fd.write(f'ehrid={ehrid}  cid={cid}\n')
+                composition=get_composition(client,auth,ehrid,cid,templatename)
+ 
+
+            logging.debug('composition read')
+            logging.debug(json.dumps(composition, indent=2))
+
             if 'status' in composition:
                 logging.info(f'error retrieving composition for patient={patient}')
                 sys.exit(1)
@@ -910,9 +994,25 @@ def main():
             # logging.debug(f'type(mxo)={type(mxo)}')
             
             #COMPARISON
+            
+            #Location
+            if templatenamecomp+'/context/biobank/biobank_name' in composition:
+                locationfromcomp=composition[templatenamecomp+'/context/biobank/biobank_name']
+                if location != locationfromcomp:
+                    logging.debug(f'LOCATION DIFFERENT xml={location} comp={locationfromcomp}')
+                    totalnumberdifferences+=1
+                    totalnumberdifferencesperfile+=1
+                    totalan+=1
+                    totalanperfile+=1
+            else:
+                logging.debug(f'LOCATION DIFFERENT: MISSING in composition xml={location}')
+                totalnumberdifferences+=1
+                totalnumberdifferencesperfile+=1
+                totalan+=1
+                totalanperfile+=1                   
 
             #BasicData
-            ndiffhere,nana=comparexml2comp('BasicData',BasicData,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('BasicData',BasicData,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -922,7 +1022,7 @@ def main():
             #fd.write(f'NDIFF Block BasicData={ndiffhere}\n')
             
             #Histopathology
-            ndiffhere,nana=comparexml2comp('Histopathology',Histopathology,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Histopathology',Histopathology,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -932,7 +1032,7 @@ def main():
             #fd.write(f'NDIFF Block Histopathology={ndiffhere}\n')
 
             #Sample
-            ndiffhere,nana=comparexml2comp('Sample',Sample,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Sample',Sample,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -942,7 +1042,7 @@ def main():
             #fd.write(f'NDIFF Block Sample={ndiffhere}\n')
 
             #Surgery
-            ndiffhere,nana=comparexml2comp('Surgery',Surgery,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Surgery',Surgery,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -952,7 +1052,7 @@ def main():
             #fd.write(f'NDIFF Block Surgery={ndiffhere}\n')
 
             #Pharmacotherapy
-            ndiffhere,nana=comparexml2comp('Pharmacotherapy',Pharmacotherapy,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Pharmacotherapy',Pharmacotherapy,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -962,7 +1062,7 @@ def main():
             #fd.write(f'NDIFF Block Pharmacotherapy={ndiffhere}\n')
 
             #Responsetotherapy
-            ndiffhere,nana=comparexml2comp('Responsetotherapy',Responsetotherapy,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Responsetotherapy',Responsetotherapy,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -972,7 +1072,7 @@ def main():
             #fd.write(f'NDIFF Block Responsetotherapy={ndiffhere}\n')
 
             #TargetedTherapy
-            ndiffhere,nana=comparexml2comp('TargetedTherapy',TargetedTherapy,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('TargetedTherapy',TargetedTherapy,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
@@ -982,7 +1082,7 @@ def main():
             #fd.write(f'NDIFF Block TargetedTherapy={ndiffhere}\n')
 
             #Radiationtherapy
-            ndiffhere,nana=comparexml2comp('Radiationtherapy',Radiationtherapy,composition,fd,patient)
+            ndiffhere,nana=comparexml2comp('Radiationtherapy',Radiationtherapy,composition,fd,patient,notload)
             nperpat+=ndiffhere
             totalnumberdifferences+=ndiffhere
             totalnumberdifferencesperfile+=ndiffhere
